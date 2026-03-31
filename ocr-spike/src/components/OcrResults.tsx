@@ -9,6 +9,7 @@ interface OcrResult {
     type: string;
     size: number;
     processedAt: string;
+    engine?: string;
   };
 }
 
@@ -73,6 +74,15 @@ export default function OcrResults({ result, error, isLoading }: OcrResultsProps
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <span className="font-medium text-gray-900">Extraction Complete</span>
+            {result.metadata.engine && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                result.metadata.engine === 'google' 
+                  ? 'bg-blue-100 text-blue-700' 
+                  : 'bg-purple-100 text-purple-700'
+              }`}>
+                {result.metadata.engine === 'google' ? 'Google Vision' : 'Tesseract'}
+              </span>
+            )}
           </div>
           <span className="text-xs text-gray-500">
             {new Date(result.metadata.processedAt).toLocaleTimeString()}

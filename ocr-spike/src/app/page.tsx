@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import FileUpload from '@/components/FileUpload';
 import CameraCapture from '@/components/CameraCapture';
 import OcrResults from '@/components/OcrResults';
+import EngineSelector from '@/components/EngineSelector';
 
 type Tab = 'upload' | 'camera';
 
@@ -16,6 +17,7 @@ interface OcrResult {
     type: string;
     size: number;
     processedAt: string;
+    engine: string;
   };
 }
 
@@ -24,6 +26,7 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [result, setResult] = useState<OcrResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedEngine, setSelectedEngine] = useState<string>('tesseract');
 
   const processFile = useCallback(async (file: File) => {
     setIsProcessing(true);
@@ -34,7 +37,8 @@ export default function Home() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/ocr', {
+      // Pass selected engine as query param
+      const response = await fetch(`/api/ocr?engine=${selectedEngine}`, {
         method: 'POST',
         body: formData,
       });
@@ -52,7 +56,7 @@ export default function Home() {
     } finally {
       setIsProcessing(false);
     }
-  }, []);
+  }, [selectedEngine]);
 
   return (
     <main className="min-h-screen py-8 px-4">
@@ -63,8 +67,16 @@ export default function Home() {
             Flyer OCR Extraction
           </h1>
           <p className="mt-2 text-gray-600">
-            Extract vendor data from flyer images and PDFs using Google Cloud Vision
+            Extract vendor data from flyer images using OCR
           </p>
+        </div>
+
+        {/* Engine Selector */}
+        <div className="mb-6">
+          <EngineSelector 
+            selectedEngine={selectedEngine} 
+            onEngineChange={setSelectedEngine} 
+          />
         </div>
 
         {/* Tab navigation */}
@@ -116,9 +128,9 @@ export default function Home() {
 
         {/* Footer info */}
         <div className="mt-8 text-center text-xs text-gray-400">
-          <p>Spike PoC • Google Cloud Vision API</p>
+          <p>OCR Spike PoC • Multi-Engine Support</p>
           <p className="mt-1">
-            Supports: JPG, PNG, GIF, WebP, PDF
+            Supports: JPG, PNG, GIF, WebP
           </p>
         </div>
       </div>
