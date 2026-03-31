@@ -1,73 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getOcrEngine, getAvailableEngines, ALLOWED_IMAGE_TYPES, isValidEngine, SUPPORTED_ENGINES } from '@/lib/ocr';
 
-// Use Vision API REST endpoint with API key (no service account needed)
-const VISION_API_URL = 'https://vision.googleapis.com/v1/images:annotate';
-
-interface VisionApiResponse {
-  responses: Array<{
-    fullTextAnnotation?: {
-      text: string;
-      pages?: Array<{
-        blocks?: Array<{
-          confidence?: number;
-          paragraphs?: Array<{
-            words?: Array<{
-              symbols?: Array<{
-                text: string;
-              }>;
-            }>;
-          }>;
-        }>;
-      }>;
-    };
-    error?: {
-      message: string;
-    };
-  }>;
-}
-
-async function callVisionApi(imageBase64: string, apiKey: string): Promise<VisionApiResponse> {
-  const response = await fetch(`${VISION_API_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      requests: [
-        {
-          image: {
-            content: imageBase64,
-          },
-          features: [
-            {
-              type: 'DOCUMENT_TEXT_DETECTION',
-              maxResults: 1,
-            },
-          ],
-        },
-      ],
-    }),
+// GET: Return available engines
+export async function GET() {
+  const availableEngines = getAvailableEngines();
+  return NextResponse.json({
+    engines: SUPPORTED_ENGINES,
+    available: availableEngines,
+    default: availableEngines[0] || null,
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Vision API error: ${response.status} - ${errorText}`);
-  }
-
-  return response.json();
 }
 
+// POST: Process OCR with selected engine
 export async function POST(request: NextRequest) {
   try {
-    const apiKey = process.env.GOOGLE_CLOUD_API_KEY;
-    
-    if (!apiKey) {
+    // Get engine from query param or default to first available
+    const { searchParams } = new URL(request.url);
+    const engineName = searchParams.get('engine') || getAvailableEngines()[0];
+
+    if (!engineName) {
       return NextResponse.json(
         { 
-          error: 'Google Cloud API key not configured', 
-          details: 'Set GOOGLE_CLOUD_API_KEY in .env.local' 
+          success: false,
+          error: 'No OCR engine available', 
+          details: 'Configure GOOGLE_CLOUD_API_KEY for Google Vision, or Tesseract should always be available.' 
         },
         { status: 500 }
+      );
+    }
+
+    if (!isValidEngine(engineName)) {
+      return NextResponse.json(
+        { 
+          success: false,
+          error: `Invalid engine: ${engineName}`, 
+          details: `Supported engines: ${SUPPORTED_ENGINES.join(', ')}` 
+        },
+        { status: 400 }
       );
     }
 
@@ -76,63 +45,32 @@ export async function POST(request: NextRequest) {
 
     if (!file) {
       return NextResponse.json(
-        { error: 'No file provided' },
+        { success: false, error: 'No file provided' },
         { status: 400 }
       );
     }
 
-    // Validate file type (Note: PDF requires different handling with REST API)
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
+    // Validate file type
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
       return NextResponse.json(
-        { error: `Invalid file type: ${file.type}. Allowed: ${allowedTypes.join(', ')}` },
+        { 
+          success: false,
+          error: `Invalid file type: ${file.type}`, 
+          details: `Allowed: ${ALLOWED_IMAGE_TYPES.join(', ')}` 
+        },
         { status: 400 }
       );
     }
 
-    // Convert file to base64
+    // Convert file to buffer
     const bytes = await file.arrayBuffer();
-    const base64 = Buffer.from(bytes).toString('base64');
+    const buffer = Buffer.from(bytes);
 
-    // Call Vision API
-    const visionResponse = await callVisionApi(base64, apiKey);
-    
-    const result = visionResponse.responses[0];
-    
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
+    // Get the engine and process
+    const engine = getOcrEngine(engineName);
+    const result = await engine.process(buffer, file.name, file.type, file.size);
 
-    const annotation = result.fullTextAnnotation;
-    const fullText = annotation?.text || '';
-    
-    // Extract blocks with confidence scores
-    const blocks: Array<{ text: string; confidence: number }> = [];
-    if (annotation?.pages) {
-      for (const page of annotation.pages) {
-        for (const block of page.blocks || []) {
-          const blockText = block.paragraphs
-            ?.map(p => p.words?.map(w => w.symbols?.map(s => s.text).join('')).join(' '))
-            .join('\n') || '';
-          blocks.push({
-            text: blockText,
-            confidence: block.confidence || 0,
-          });
-        }
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      text: fullText,
-      blocks,
-      metadata: {
-        filename: file.name,
-        type: file.type,
-        size: file.size,
-        processedAt: new Date().toISOString(),
-      },
-    });
+    return NextResponse.json(result);
   } catch (error) {
     console.error('OCR Error:', error);
     
@@ -140,6 +78,7 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json(
       { 
+        success: false,
         error: 'OCR processing failed', 
         details: errorMessage,
       },
