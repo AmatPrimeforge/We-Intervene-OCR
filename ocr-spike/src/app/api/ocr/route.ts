@@ -1,5 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getOcrEngine, getAvailableEngines, ALLOWED_IMAGE_TYPES, isValidEngine, SUPPORTED_ENGINES } from '@/lib/ocr';
+import { 
+  getOcrEngine, 
+  getAvailableEngines, 
+  ALLOWED_FILE_TYPES,
+  isValidEngine, 
+  SUPPORTED_ENGINES,
+  isPdfFile,
+  MAX_PDF_PAGES,
+  convertPdfToImages,
+  wasPdfTruncated,
+  OcrResult,
+  OcrPageResult,
+  OcrBlock,
+} from '@/lib/ocr';
 
 // GET: Return available engines
 export async function GET() {
@@ -50,13 +63,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate file type
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    // Validate file type (now supports images AND PDFs)
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
       return NextResponse.json(
         { 
           success: false,
           error: `Invalid file type: ${file.type}`, 
-          details: `Allowed: ${ALLOWED_IMAGE_TYPES.join(', ')}` 
+          details: `Allowed: ${ALLOWED_FILE_TYPES.join(', ')}` 
         },
         { status: 400 }
       );
@@ -66,11 +79,25 @@ export async function POST(request: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Get the engine and process
+    // Get the engine
     const engine = getOcrEngine(engineName);
-    const result = await engine.process(buffer, file.name, file.type, file.size);
 
-    return NextResponse.json(result);
+    // Handle PDF files
+    if (isPdfFile(file.type)) {
+      return await processPdf(buffer, file.name, file.type, file.size, engine);
+    }
+
+    // Handle image files (original logic)
+    const result = await engine.process(buffer, file.name, file.type, file.size);
+    
+    // Add pageCount for consistency
+    return NextResponse.json({
+      ...result,
+      metadata: {
+        ...result.metadata,
+        pageCount: 1,
+      },
+    });
   } catch (error) {
     console.error('OCR Error:', error);
     
@@ -85,4 +112,91 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Process a multi-page PDF document
+ */
+async function processPdf(
+  buffer: Buffer,
+  filename: string,
+  fileType: string,
+  fileSize: number,
+  engine: { name: string; process: (buffer: Buffer, filename: string, fileType: string, fileSize: number) => Promise<OcrResult> }
+) {
+  // Convert PDF to images
+  const conversionResult = await convertPdfToImages(buffer);
+  
+  if (!conversionResult.success) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: conversionResult.error,
+        details: conversionResult.details,
+      },
+      { status: 400 }
+    );
+  }
+
+  const { images, pageCount, totalPages } = conversionResult;
+  
+  // Process each page
+  const pageResults: OcrPageResult[] = [];
+  const allBlocks: OcrBlock[] = [];
+  const allTexts: string[] = [];
+
+  for (let i = 0; i < images.length; i++) {
+    const pageBuffer = images[i];
+    const pageFilename = `${filename}_page_${i + 1}.png`;
+    
+    try {
+      const pageResult = await engine.process(pageBuffer, pageFilename, 'image/png', pageBuffer.length);
+      
+      // Calculate average confidence for the page
+      const avgConfidence = pageResult.blocks.length > 0
+        ? pageResult.blocks.reduce((sum, b) => sum + b.confidence, 0) / pageResult.blocks.length
+        : 0;
+
+      pageResults.push({
+        pageNumber: i + 1,
+        text: pageResult.text,
+        blocks: pageResult.blocks,
+        confidence: avgConfidence,
+      });
+
+      allTexts.push(pageResult.text);
+      allBlocks.push(...pageResult.blocks);
+    } catch (pageError) {
+      console.error(`Error processing page ${i + 1}:`, pageError);
+      // Add error placeholder for this page
+      pageResults.push({
+        pageNumber: i + 1,
+        text: `[Error processing page ${i + 1}]`,
+        blocks: [],
+        confidence: 0,
+      });
+    }
+  }
+
+  // Build the response
+  const truncationNote = wasPdfTruncated(totalPages)
+    ? `\n\n[Note: PDF had ${totalPages} pages. Only first ${MAX_PDF_PAGES} pages were processed.]`
+    : '';
+
+  const result: OcrResult = {
+    success: true,
+    text: allTexts.join('\n\n--- Page Break ---\n\n') + truncationNote,
+    blocks: allBlocks,
+    pages: pageResults,
+    metadata: {
+      filename,
+      type: fileType,
+      size: fileSize,
+      processedAt: new Date().toISOString(),
+      engine: engine.name,
+      pageCount,
+    },
+  };
+
+  return NextResponse.json(result);
 }

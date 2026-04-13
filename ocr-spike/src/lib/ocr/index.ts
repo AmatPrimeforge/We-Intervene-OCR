@@ -6,6 +6,7 @@ import { createGoogleVisionEngine } from './google-vision';
 import { createTesseractEngine } from './tesseract';
 
 export * from './types';
+export * from './pdf-converter';
 
 /**
  * Get an OCR engine by name
