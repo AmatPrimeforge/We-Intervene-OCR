@@ -108,6 +108,7 @@ export class TesseractEngine implements OcrEngine {
           size: fileSize,
           processedAt: new Date().toISOString(),
           engine: this.name,
+          pageCount: 1,
         },
       };
     } finally {
