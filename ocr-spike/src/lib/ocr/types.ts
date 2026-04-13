@@ -30,6 +30,8 @@ export interface OcrResult {
   blocks: OcrBlock[];
   /** Per-page results for multi-page documents (PDFs) */
   pages?: OcrPageResult[];
+  /** Page-level errors encountered during processing (partial failure) */
+  errors?: string[];
   metadata: {
     filename: string;
     type: string;
